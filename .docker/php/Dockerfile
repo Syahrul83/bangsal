@@ -51,6 +51,26 @@ COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 COPY .docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
 
+# ---- FIX: Make user/group setup safe & idempotent BEFORE chown anything ----
+RUN set -eux; \
+    apk add --no-cache shadow; \
+    # ensure numeric (protect against accidental strings)
+    echo "${WWWGROUP}" | grep -Eq '^[0-9]+$' || { echo "WWWGROUP must be numeric"; exit 1; }; \
+    echo "${WWWUSER}"  | grep -Eq '^[0-9]+$' || { echo "WWWUSER must be numeric"; exit 1; }; \
+    # ensure group exists or set its gid
+    if getent group www-data >/dev/null; then \
+        groupmod -g "${WWWGROUP}" www-data || true; \
+    else \
+        addgroup -g "${WWWGROUP}" -S www-data; \
+    fi; \
+    # ensure user exists or set its uid and primary group
+    if id -u www-data >/dev/null 2>&1; then \
+        usermod -u "${WWWUSER}" -g "${WWWGROUP}" www-data || true; \
+    else \
+        adduser -S -D -H -u "${WWWUSER}" -G www-data www-data; \
+    fi
+
+
 RUN mkdir -p /var/log/supervisor \
     && touch /var/log/supervisord.log /var/log/supervisord.err \
     && chown -R www-data:www-data /var/log/supervisor /var/log/supervisord.* \
