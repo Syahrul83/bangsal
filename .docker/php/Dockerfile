@@ -2,13 +2,16 @@ FROM php:8.4-fpm-alpine AS base
 
 ENV NODE_VERSION=22.0.0
 
-ARG WWWUSER
-ARG WWWGROUP
+# Give safe numeric defaults so groupmod/usermod won't fail if build args are not passed
+ARG WWWUSER=1000
+ARG WWWGROUP=1000
 
+# Use edge repos for latest packages (as in your original)
 RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories \
     && echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories \
     && apk update && apk upgrade
 
+# gosu
 RUN set -eux; \
     apk add --no-cache --virtual .gosu-deps dpkg; \
     GOSU_VERSION=1.17; \
@@ -16,7 +19,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/gosu; \
     apk del .gosu-deps
 
-
+# base packages + PHP extensions
 RUN apk add --no-cache su-exec \
     bash \
     zip \
@@ -34,21 +37,21 @@ RUN apk add --no-cache su-exec \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install gd pdo pdo_mysql pdo_pgsql opcache bcmath sockets pcntl
 
-RUN apk add --no-cache nodejs \
-    npm
-
+# Node & npm
+RUN apk add --no-cache nodejs npm
 RUN node -v && npm -v
 
-RUN apk add --no-cache autoconf \
-  g++ \
-  make \
-  libtool
+# build tools
+RUN apk add --no-cache autoconf g++ make libtool
 
+# pecl extensions
 RUN pecl install redis amqp msgpack \
     && docker-php-ext-enable redis amqp msgpack
 
+# composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
+# php.ini
 COPY .docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
 
 # ---- FIX: Make user/group setup safe & idempotent BEFORE chown anything ----
@@ -70,24 +73,18 @@ RUN set -eux; \
         adduser -S -D -H -u "${WWWUSER}" -G www-data www-data; \
     fi
 
-
+# logs & perms
 RUN mkdir -p /var/log/supervisor \
     && touch /var/log/supervisord.log /var/log/supervisord.err \
     && chown -R www-data:www-data /var/log/supervisor /var/log/supervisord.* \
     && chmod -R 777 /var/log/supervisor /var/log/supervisord.*
 
+# entrypoint
 COPY .docker/php/entrypoint.sh /entrypoint.sh
-
-RUN apk add --no-cache shadow \
-    && groupmod -g ${WWWGROUP} www-data \
-    && usermod -u ${WWWUSER} www-data \
-    && usermod -aG www-data www-data
-
-
 RUN chmod +x /entrypoint.sh
-
 ENTRYPOINT ["/entrypoint.sh"]
 
+# ================= DEV =================
 FROM base AS dev
 
 RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
@@ -102,6 +99,7 @@ RUN apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
 
 CMD ["supervisord", "-c", "/etc/supervisord.conf"]
 
+# ================= PROD =================
 FROM base AS prod
 
 WORKDIR /var/www
